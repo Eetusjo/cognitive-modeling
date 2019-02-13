@@ -143,7 +143,7 @@ def main(args):
             xs, dlogps, drs = [], [], []
             # Periodically update the model
             if episode_number % update_frequency == 0:
-                y_train = probs + learning_rate * np.squeeze(np.vstack(train_y)) # Hacky WIP
+                y_train = probs + learning_rate * np.squeeze(np.vstack(train_y))
 
                 print('Training Snapshot:')
                 print(y_train)
@@ -155,9 +155,9 @@ def main(args):
                 probs = []
 
                 # Save a checkpoint of the model
-                os.remove('pong_model_checkpoint.h5') \
-                    if os.path.exists('pong_model_checkpoint.h5') else None
-                model.save_weights('pong_model_checkpoint.h5')
+                path = '{}/{}.h5'.format(args.savedir, args.name)
+                os.remove(path) if os.path.exists(path) else None
+                model.save_weights(path)
 
             # Reset the current environment nad print the current results
             running_reward = reward_sum if running_reward is None \
@@ -173,7 +173,11 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("-n", "--name", default="pong",
+                        help="Name for experiment. Used for saving model.")
     parser.add_argument("-g", "--gamma", type=float, default=0.99,
                         help="Gamma parameter for discounting rewards")
+    parser.add_argument("-s", "--savedir", default="./saved/",
+                        help="Directory for saving models")
     args = parser.parse_args()
     main(args)
