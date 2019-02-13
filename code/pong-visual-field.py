@@ -20,7 +20,6 @@ from keras.layers.convolutional import Convolution2D
 
 # Script Parameters
 input_dim = 80 * 80
-gamma = 0.99  # Parameter for dicsounting rewards
 update_frequency = 1
 learning_rate = 0.001
 resume = False
@@ -48,7 +47,7 @@ def pong_preprocess_screen(screen):
     return screen.astype(np.float).ravel()
 
 
-def discount_rewards(r):
+def discount_rewards(r, gamma):
     discounted_r = np.zeros_like(r)
     running_add = 0
     for t in reversed(range(0, r.size)):
@@ -84,12 +83,14 @@ def learning_model(input_dim=80*80, num_actions=2, model_type=1):
     return model
 
 
-def main():
-    # Initialize
+def main(args):
+    # Initialize gym environment
     env = gym.make("Pong-v0")
-    number_of_inputs = env.action_space.n  # This is incorrect for Pong (?)
-    # number_of_inputs = 1
+    # Get number of actions available in environment
+    number_of_inputs = env.action_space.n  # This is incorrect for Pong (but whatever)
+    # Reset env and get first screen
     observation = env.reset()
+    # Keep previous screen in memory
     prev_x = None
     xs, dlogps, drs, probs = [], [], [], []
     running_reward = None
@@ -98,6 +99,7 @@ def main():
     train_X = []
     train_y = []
 
+    # Initialize model
     model = learning_model(num_actions=number_of_inputs)
 
     # Begin training
@@ -130,7 +132,7 @@ def main():
             # epx = np.vstack(xs)
             epdlogp = np.vstack(dlogps)
             epr = np.vstack(drs)
-            discounted_epr = discount_rewards(epr)
+            discounted_epr = discount_rewards(epr, args.gamma)
             discounted_epr -= np.mean(discounted_epr)
             discounted_epr /= np.std(discounted_epr)
             epdlogp *= discounted_epr
@@ -170,4 +172,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-g", "--gamma", type=float, default=0.99,
+                        help="Gamma parameter for discounting rewards")
+    args = parser.parse_args()
+    main(args)
