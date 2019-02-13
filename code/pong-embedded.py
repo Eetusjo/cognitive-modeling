@@ -22,7 +22,6 @@ from keras.layers.convolutional import Convolution2D
 input_dim = 80 * 80
 update_frequency = 1
 learning_rate = 0.001
-resume = False
 render = False
 
 
@@ -39,12 +38,8 @@ def pong_preprocess_screen(screen):
     paddle_column = screen[:, 71]
     # Get correct rows (paddle position)
     indices = np.where(paddle_column != 1)[0]
-
-    # If game in ongoing, mask screen outside visual field
-    if len(indices) > 0:
-        screen[indices] = 2
-
-    return screen.astype(np.float).ravel()
+    # Return processed screen and paddle position as row indices
+    return screen.astype(np.float).ravel(), indices
 
 
 def discount_rewards(r, gamma):
@@ -58,7 +53,7 @@ def discount_rewards(r, gamma):
     return discounted_r
 
 
-def learning_model(input_dim=80*80, num_actions=2, model_type=1):
+def learning_model(input_dim=80*80, num_actions=2, model_type=1, resume=None):
     model = Sequential()
     if model_type == 0:
         model.add(Reshape((1, 80, 80), input_shape=(input_dim,)))
@@ -78,9 +73,16 @@ def learning_model(input_dim=80*80, num_actions=2, model_type=1):
     model.compile(loss='categorical_crossentropy', optimizer=opt)
 
     if resume:
-        model.load_weights('pong_model_checkpoint.h5')
+        model.load_weights(resume)
 
     return model
+
+
+def mask_visual_field(screen, indices):
+    # If game ongoing, mask visual field
+    if len(indices) > 0:
+        screen[indices] = 0
+    return screen
 
 
 def main(args):
@@ -100,15 +102,20 @@ def main(args):
     train_y = []
 
     # Initialize model
-    model = learning_model(num_actions=number_of_inputs)
+    model = learning_model(num_actions=number_of_inputs, resume=args.resume)
 
     # Begin training
     while True:
         if render:
             env.render()
         # Preprocess, consider the frame difference as features
-        cur_x = pong_preprocess_screen(observation)
+        cur_x, paddle_indices = pong_preprocess_screen(observation)
         x = cur_x - prev_x if prev_x is not None else np.zeros(input_dim)
+
+        # FIXME
+        if args.visual_field:
+            x = mask_visual_field(x, paddle_indices)
+
         prev_x = cur_x
         xs.append(x)
 
@@ -179,5 +186,9 @@ if __name__ == "__main__":
                         help="Gamma parameter for discounting rewards")
     parser.add_argument("-s", "--savedir", default="./saved/",
                         help="Directory for saving models")
+    parser.add_argument("-r", "--resume", default=None,
+                        help="Path of pre-trained model.")
+    parser.add_argument("--visual_field", action="store_true",
+                        help="Use a restricted visual field for paddle.")
     args = parser.parse_args()
     main(args)
