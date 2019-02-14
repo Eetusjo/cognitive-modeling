@@ -10,6 +10,7 @@ import argparse
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 import numpy as np
+from tensorboardX import SummaryWriter
 
 from keras.models import Sequential
 from keras.layers import Dense, Reshape
@@ -28,15 +29,13 @@ render = False
 def pong_preprocess_screen(screen):
     screen = screen[35:195]
     screen = screen[::2, ::2, 0]
-    screen[screen == 236] = 1
-    screen[screen == 213] = 1
-    screen[screen == 92] = 1
-    screen[screen < 1] = 0
-    screen[screen > 1] = 0
+    screen[screen == 144] = 0
+    screen[screen == 109] = 0
+    screen[screen != 0] = 1
 
     # Get the correct column to retrieve paddle position
     paddle_column = screen[:, 71]
-    # Get correct rows (paddle position)
+    # Get correct rows for maskig (exclude paddle position)
     indices = np.where(paddle_column != 1)[0]
     # Return processed screen and paddle position as row indices
     return screen.astype(np.float).ravel(), indices
@@ -53,15 +52,16 @@ def discount_rewards(r, gamma):
     return discounted_r
 
 
-def learning_model(input_dim=80*80, num_actions=2, model_type=1, resume=None):
+def learning_model(input_dim=80*80, num_actions=3,
+                   model_type="shallow_cnn", resume=None):
     model = Sequential()
-    if model_type == 0:
+    if model_type == "mlp":
         model.add(Reshape((1, 80, 80), input_shape=(input_dim,)))
         model.add(Flatten())
         model.add(Dense(200, activation='relu'))
         model.add(Dense(num_actions, activation='softmax'))
         opt = RMSprop(lr=learning_rate)
-    else:
+    elif model_type == "shallow_cnn":
         model.add(Reshape((1, 80, 80), input_shape=(input_dim,)))
         model.add(Convolution2D(32, 9, 9, subsample=(4, 4), border_mode='same',
                                 activation='relu', init='he_uniform'))
@@ -69,9 +69,10 @@ def learning_model(input_dim=80*80, num_actions=2, model_type=1, resume=None):
         model.add(Dense(16, activation='relu', init='he_uniform'))
         model.add(Dense(num_actions, activation='softmax'))
         opt = Adam(lr=learning_rate)
+    elif model_type == "deep_cnn":
+        raise NotImplementedError("Deep CNN model not implemented.")
 
     model.compile(loss='categorical_crossentropy', optimizer=opt)
-
     if resume:
         model.load_weights(resume)
 
@@ -81,15 +82,18 @@ def learning_model(input_dim=80*80, num_actions=2, model_type=1, resume=None):
 def mask_visual_field(screen, indices):
     # If game ongoing, mask visual field
     if len(indices) > 0:
-        screen[indices] = 0
-    return screen
+        screen[indices, :] = 0
+    return screen.ravel()
 
 
 def main(args):
+    # Initialize tensorboardX writer
+    writer = SummaryWriter("{}/{}/".format(args.logdir, args.name))
+
     # Initialize gym environment
     env = gym.make("Pong-v0")
-    # Get number of actions available in environment
-    number_of_inputs = env.action_space.n  # This is incorrect for Pong (but whatever)
+    # Number of actions allowed
+    n_actions = 3
     # Reset env and get first screen
     observation = env.reset()
     # Keep previous screen in memory
@@ -102,19 +106,17 @@ def main(args):
     train_y = []
 
     # Initialize model
-    model = learning_model(num_actions=number_of_inputs, resume=args.resume)
+    model = learning_model(num_actions=n_actions, resume=args.resume)
 
     # Begin training
     while True:
         if render:
             env.render()
         # Preprocess, consider the frame difference as features
-        cur_x, paddle_indices = pong_preprocess_screen(observation)
+        cur_x, mask_indices = pong_preprocess_screen(observation)
         x = cur_x - prev_x if prev_x is not None else np.zeros(input_dim)
-
-        # FIXME
-        if args.visual_field:
-            x = mask_visual_field(x, paddle_indices)
+        x = mask_visual_field(x.reshape(80, 80), mask_indices) \
+            if args.visual_field else x
 
         prev_x = cur_x
         xs.append(x)
@@ -125,10 +127,14 @@ def main(args):
 
         # Sample action
         aprob = aprob/np.sum(aprob)
-        action = np.random.choice(number_of_inputs, 1, p=aprob)[0]
+        # Original samples from [0, 5], but {0, 1, 4, 5} do nothing. Sampling
+        # from [1, 3] allows same actions (nothing, up, down) with less
+        # computation.
+        action = np.random.choice([1, 2, 3], 1, p=aprob)[0]
 
-        y = np.zeros([number_of_inputs])
-        y[action] = 1
+        y = np.zeros([n_actions])
+        # Compensate for sampling from [1, 3]
+        y[action - 1] = 1
         # Append features and labels for the episode-batch
         dlogps.append(np.array(y).astype('float32') - aprob)
         observation, reward, done, info = env.step(action)
@@ -152,8 +158,8 @@ def main(args):
             if episode_number % update_frequency == 0:
                 y_train = probs + learning_rate * np.squeeze(np.vstack(train_y))
 
-                print('Training Snapshot:')
-                print(y_train)
+                # print('Training Snapshot:')
+                # print(y_train)
                 model.train_on_batch(np.squeeze(np.vstack(train_X)), y_train)
 
                 # Clear the batch
@@ -166,14 +172,17 @@ def main(args):
                 os.remove(path) if os.path.exists(path) else None
                 model.save_weights(path)
 
-            # Reset the current environment nad print the current results
+            # Reset the current environment and print the current results
             running_reward = reward_sum if running_reward is None \
                 else running_reward * 0.99 + reward_sum * 0.01
             print('Environment reset imminent. Total Episode Reward: %f. Running Mean: %f' % (reward_sum, running_reward))
+
+            writer.add_scalar("reward", reward_sum, episode_number)
+
             reward_sum = 0
             observation = env.reset()
             prev_x = None
-        if reward != 0:
+        if reward != 0 and args.verbose:
             print(('Episode %d Result: ' % episode_number)
                   + ('Defeat!' if reward == -1 else 'VICTORY!'))
 
@@ -186,9 +195,13 @@ if __name__ == "__main__":
                         help="Gamma parameter for discounting rewards")
     parser.add_argument("-s", "--savedir", default="./saved/",
                         help="Directory for saving models")
+    parser.add_argument("-l", "--logdir", default="./log/",
+                        help="Directory for logging model training.")
     parser.add_argument("-r", "--resume", default=None,
                         help="Path of pre-trained model.")
     parser.add_argument("--visual_field", action="store_true",
                         help="Use a restricted visual field for paddle.")
+    parser.add_argument("--verbose", action="store_true",
+                        help="Verbose logging to stdout.")
     args = parser.parse_args()
     main(args)
