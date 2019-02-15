@@ -198,7 +198,7 @@ def main(args):
                 x_train, y_train = [], []
                 # Save a checkpoint of the model
                 path = '{}/{}.h5'.format(args.savedir, args.name)
-                # Remove old model ceckpoint
+                # Remove old model checkpoint
                 os.remove(path) if os.path.exists(path) else None
                 # Save model
                 model.save_weights(path)
