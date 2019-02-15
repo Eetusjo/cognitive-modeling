@@ -103,13 +103,19 @@ def main(args):
     writer = SummaryWriter("{}/{}/".format(args.logdir, args.name))
     # Initialize gym environment
     env = gym.make("Pong-v0")
-    # Number of actions allowed
+    # Number of actions allowed (NOTHING, UP. DOWN)
     n_actions = 3
     # Reset env and get first screen
     observation = env.reset()
+
     # Keep previous screen in memory
     prev_x = None
-    x_train, y_train, rewards = [], [], []
+    # Keep previous action in memory (movement constraints)
+    prev_action = None
+
+    # Initialize lists for batches
+    x_train, y_train, rewards, action_rewards = [], [], [], []
+
     # For smoothing per-episode reward logging
     running_reward = None
     # Keep track of rewards in episode
@@ -117,7 +123,7 @@ def main(args):
     # Keep track of episode
     episode_number = 0
 
-    # Initialize models log
+    # Initialize model
     model = learning_model(
         num_actions=n_actions, resume=args.resume, lr=args.lr
     )
@@ -129,32 +135,42 @@ def main(args):
         # Preprocess, consider the frame difference as features
         cur_x, mask_indices = pong_preprocess_screen(observation)
         x = cur_x - prev_x if prev_x is not None else np.zeros(input_dim)
+
         # Mask parts of screen if simulating visual field
         x = mask_visual_field(x.reshape(80, 80), mask_indices) \
             if args.visual_field else x
+
+        # Set current (non-masked) screen as previous
         prev_x = cur_x
+        # Append (masked) screen to batch
         x_train.append(x)
 
-        # Predict probabilities from the Keras model
+        # Predict probabilities for actions using the model
         aprob = model.predict(x.reshape([1, -1]), batch_size=1).flatten()
-        # Sample action
-        # Original samples from [0, 5], but {0, 1, 4, 5} do nothing. Sampling
-        # from [1, 3] allows same actions (nothing, up, down) with less
-        # computation.
+        # Sample action. Original samples from [0, 5], but {0, 1, 4, 5} do
+        # nothing. Sampling from [1, 3] allows same actions (nothing, up, down)
+        # with less computation.
         action = np.random.choice([1, 2, 3], 1, p=aprob)[0]
+
+        # +1 if took same actions as last step, -1 if different
+        # FIXME: Should we take into account when no action was taken?
+        if action == prev_action or prev_action is None:
+            action_rewards.append(1.)
+        else:
+            action_rewards.append(-1.)
 
         # Store action as one-hot encoded vector
         y = np.zeros([n_actions])
         # -1 compensates for sampling from [1, 3]
         y[action - 1] = 1
-        # Gather action for training
+        # Gather action for training batch
         y_train.append(y)
 
         # Take step in game
         observation, reward, done, info = env.step(action)
         # Gather sum for this episode
         reward_sum += reward
-        # Gather rewards for later (training time)
+        # Gather rewards for later
         rewards.append(reward)
 
         # Game finished
@@ -164,10 +180,17 @@ def main(args):
             if episode_number % update_frequency == 0:
                 # Calculate weights for rewards ("discount")
                 discounted = discount_rewards(np.vstack(rewards), args.gamma)
+
+                # Use movement contraings if parameter > 0
+                if args.alpha > 0:
+                    action_rewards = np.array(action_rewards, dtype=np.float)
+                    # Scale movement constraint weights by alpha
+                    discounted = np.add(discounted, args.alpha*action_rewards)
+
                 # Reset rewards list
                 rewards = []
 
-                # Train on this batch
+                # Train on this batch, weighting samples by discounted rewards
                 model.train_on_batch(np.squeeze(np.vstack(x_train)),
                                      np.vstack(y_train),
                                      sample_weight=discounted)
@@ -177,6 +200,7 @@ def main(args):
                 path = '{}/{}.h5'.format(args.savedir, args.name)
                 # Remove old model ceckpoint
                 os.remove(path) if os.path.exists(path) else None
+                # Save model
                 model.save_weights(path)
 
             # Reset environment and print the results for this episode
@@ -186,14 +210,18 @@ def main(args):
                          "Total Episode Reward: %f. " % reward_sum +
                          "Running Mean: %f" % running_reward)
 
-            # Log using tensorboardX
+            # Log rewards for this episode using tensorboardX
             writer.add_scalar("reward", reward_sum, episode_number)
 
             reward_sum = 0
             # Reset game environment and get initial observation
             observation = env.reset()
-            # Set last screen to None
+            # Set last screen and action to None
             prev_x = None
+            prev_action = None
+            action_rewards = []
+
+        # Optionally log per-round stats
         if reward != 0 and args.verbose:
             logging.info(('Episode %d Result: ' % episode_number)
                          + ('Defeat!' if reward == -1 else 'VICTORY!'))
@@ -204,20 +232,22 @@ if __name__ == "__main__":
     parser.add_argument("-n", "--name", default="pong",
                         help="Name for experiment. Used for saving model.")
     # Model definition
+    parser.add_argument("--alpha", type=float, default=0.0, required=False,
+                        help="Controls the strength of movement constraints")
     parser.add_argument("--gamma", type=float, default=0.99, required=False,
-                        help="Gamma parameter for discounting rewards")
+                        help="Parameter for discounting rewards")
     parser.add_argument("--lr", type=float, default=0.001, required=False,
                         help="Learning rate for training.")
     parser.add_argument("--visual_field", action="store_true",
-                        help="Use a restricted visual field for paddle.")
+                        help="Use a restricted visual field for paddle")
     # Args related to training, saving and logging
     parser.add_argument("-s", "--savedir", default="./saved/",
                         help="Directory for saving models")
     parser.add_argument("-l", "--logdir", default="./log/",
-                        help="Directory for logging model training.")
+                        help="Directory for logging model training")
     parser.add_argument("-r", "--resume", default=None,
-                        help="Path of pre-trained model.")
+                        help="Path of pre-trained model")
     parser.add_argument("--verbose", action="store_true",
-                        help="Verbose logging to stdout.")
+                        help="Verbose logging to stdout")
     args = parser.parse_args()
     main(args)
