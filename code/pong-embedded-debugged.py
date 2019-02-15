@@ -7,6 +7,7 @@
 import os
 import gym
 import argparse
+import logging
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 import numpy as np
@@ -18,6 +19,10 @@ from keras.optimizers import Adam, RMSprop
 from keras.layers.normalization import BatchNormalization
 from keras.layers.core import Flatten
 from keras.layers.convolutional import Convolution2D
+
+logging.basicConfig(format="%(asctime)s: %(message)s",
+                    datefmt="%d/%m/%Y %I:%M:%S %p",
+                    level=logging.DEBUG)
 
 # Script Parameters
 # FIXME: Eventually move all of this somewhere else
@@ -53,11 +58,10 @@ def discount_rewards(r, gamma):
             running_add = 0
         running_add = running_add * gamma + r[t]
         discounted_r[t] = running_add
-
+    # Normalize
     discounted_r -= np.mean(discounted_r)
     discounted_r /= np.std(discounted_r)
-
-    return discounted_r
+    return discounted_r.ravel()
 
 
 def learning_model(input_dim=80*80, num_actions=3,
@@ -97,7 +101,6 @@ def mask_visual_field(screen, indices):
 def main(args):
     # Initialize tensorboardX writer
     writer = SummaryWriter("{}/{}/".format(args.logdir, args.name))
-
     # Initialize gym environment
     env = gym.make("Pong-v0")
     # Number of actions allowed
@@ -106,13 +109,18 @@ def main(args):
     observation = env.reset()
     # Keep previous screen in memory
     prev_x = None
-    x_train, dlogps, rewards, probs = [], [], [], []
+    x_train, y_train, rewards = [], [], []
+    # For smoothing per-episode reward logging
     running_reward = None
+    # Keep track of rewards in episode
     reward_sum = 0
+    # Keep track of episode
     episode_number = 0
 
-    # Initialize model
-    model = learning_model(num_actions=n_actions, resume=args.resume)
+    # Initialize models log
+    model = learning_model(
+        num_actions=n_actions, resume=args.resume, lr=args.lr
+    )
 
     # Begin training
     while True:
@@ -121,6 +129,7 @@ def main(args):
         # Preprocess, consider the frame difference as features
         cur_x, mask_indices = pong_preprocess_screen(observation)
         x = cur_x - prev_x if prev_x is not None else np.zeros(input_dim)
+        # Mask parts of screen if simulating visual field
         x = mask_visual_field(x.reshape(80, 80), mask_indices) \
             if args.visual_field else x
         prev_x = cur_x
@@ -128,8 +137,6 @@ def main(args):
 
         # Predict probabilities from the Keras model
         aprob = model.predict(x.reshape([1, -1]), batch_size=1).flatten()
-        probs.append(aprob)
-
         # Sample action
         # Original samples from [0, 5], but {0, 1, 4, 5} do nothing. Sampling
         # from [1, 3] allows same actions (nothing, up, down) with less
@@ -140,55 +147,56 @@ def main(args):
         y = np.zeros([n_actions])
         # -1 compensates for sampling from [1, 3]
         y[action - 1] = 1
-        # Append features and labels for the episode-batch
-        dlogps.append(y.astype('float32') - aprob)
+        # Gather action for training
+        y_train.append(y)
 
+        # Take step in game
         observation, reward, done, info = env.step(action)
+        # Gather sum for this episode
         reward_sum += reward
+        # Gather rewards for later (training time)
         rewards.append(reward)
+
+        # Game finished
         if done:
             episode_number += 1
-
-            epdlogp = np.vstack(dlogps)
-            rewards = np.vstack(rewards)
-            discounted = discount_rewards(np.vstack(rewards), args.gamma)
-            epdlogp *= discounted
-
-            # train_X contains the screen inputs
-            dlogps, rewards = [], []
-
             # Periodically update the model
             if episode_number % update_frequency == 0:
-                y_train = probs + args.lr * epdlogp
+                # Calculate weights for rewards ("discount")
+                discounted = discount_rewards(np.vstack(rewards), args.gamma)
+                # Reset rewards list
+                rewards = []
 
-                # print('Training Snapshot:')
-                # print(y_train)
-
-                model.train_on_batch(np.squeeze(np.vstack(x_train)), y_train)
-
+                # Train on this batch
+                model.train_on_batch(np.squeeze(np.vstack(x_train)),
+                                     np.vstack(y_train),
+                                     sample_weight=discounted)
                 # Clear the batch
-                x_train = []
-                probs = []
-
+                x_train, y_train = [], []
                 # Save a checkpoint of the model
                 path = '{}/{}.h5'.format(args.savedir, args.name)
                 # Remove old model ceckpoint
                 os.remove(path) if os.path.exists(path) else None
                 model.save_weights(path)
 
-            # Reset the current environment and print the current results
+            # Reset environment and print the results for this episode
             running_reward = reward_sum if running_reward is None \
                 else running_reward * 0.99 + reward_sum * 0.01
-            print('Environment reset imminent. Total Episode Reward: %f. Running Mean: %f' % (reward_sum, running_reward))
+            logging.info("Episode: %d. " % episode_number +
+                         "Total Episode Reward: %f. " % reward_sum +
+                         "Running Mean: %f" % running_reward)
 
+            # Log using tensorboardX
             writer.add_scalar("reward", reward_sum, episode_number)
 
             reward_sum = 0
+            # Reset game environment and get initial observation
             observation = env.reset()
+            # Set last screen to None
             prev_x = None
         if reward != 0 and args.verbose:
-            print(('Episode %d Result: ' % episode_number)
-                  + ('Defeat!' if reward == -1 else 'VICTORY!'))
+            logging.info(('Episode %d Result: ' % episode_number)
+                         + ('Defeat!' if reward == -1 else 'VICTORY!'))
 
 
 if __name__ == "__main__":

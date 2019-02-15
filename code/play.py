@@ -26,23 +26,25 @@ render = True
 
 
 def pong_preprocess_screen(screen):
+    # Get rid of upper and lower margins
     screen = screen[35:195]
+    # Downsample to 80x80
     screen = screen[::2, ::2, 0]
-    screen[screen == 236] = 1
-    screen[screen == 213] = 1
-    screen[screen == 92] = 1
-    screen[screen < 1] = 0
-    screen[screen > 1] = 0
+    # Change backgrounds to 0
+    screen[screen == 144] = 0
+    screen[screen == 109] = 0
+    # Change paddles and ball to 1
+    screen[screen != 0] = 1
 
     # Get the correct column to retrieve paddle position
     paddle_column = screen[:, 71]
-    # Get correct rows (paddle position)
+    # Get correct rows for maskig (exclude paddle position)
     indices = np.where(paddle_column != 1)[0]
-    # Return processed screen and paddle position as row indices
+    # Return processed screen and rows to be masked
     return screen.astype(np.float).ravel(), indices
 
 
-def learning_model(input_dim=80*80, num_actions=2, model_type=1, resume=None):
+def learning_model(input_dim=80*80, num_actions=3, model_type=1, resume=None):
     model = Sequential()
     if model_type == 0:
         model.add(Reshape((1, 80, 80), input_shape=(input_dim,)))
@@ -77,36 +79,44 @@ def mask_visual_field(screen, indices):
 def main(args):
     # Initialize gym environment
     env = gym.make("Pong-v0")
-    # Get number of actions available in environment
-    number_of_inputs = env.action_space.n # This is incorrect for Pong (but whatever)
+    # Number of actions allowed
+    n_actions = 3
     # Reset env and get first screen
     observation = env.reset()
     # Keep previous screen in memory
     prev_x = None
+    x_train, rewards = [], []
+    # Keep track of rewards in episode
+    reward_sum = 0
 
-    # Initialize model
-    model = learning_model(num_actions=number_of_inputs, resume=args.resume)
+    # Initialize models log
+    model = learning_model(
+        num_actions=n_actions, resume=args.resume,
+    )
 
-    # Begin training
     while True:
-        if render:
-            env.render()
-            time.sleep(0.01)
-
+        env.render()
+        time.sleep(0.05)
         # Preprocess, consider the frame difference as features
-        cur_x, paddle_indices = pong_preprocess_screen(observation)
+        cur_x, mask_indices = pong_preprocess_screen(observation)
         x = cur_x - prev_x if prev_x is not None else np.zeros(input_dim)
-        if args.visual_field:
-            x = mask_visual_field(x, paddle_indices)
+        x = mask_visual_field(x.reshape(80, 80), mask_indices) \
+            if args.visual_field else x
         prev_x = cur_x
+        x_train.append(x)
 
         # Predict probabilities from the Keras model
         aprob = model.predict(x.reshape([1, -1]), batch_size=1).flatten()
+
         # Sample action
-        aprob = aprob/np.sum(aprob)
-        action = np.random.choice(number_of_inputs, 1, p=aprob)[0]
+        # Original samples from [0, 5], but {0, 1, 4, 5} do nothing. Sampling
+        # from [1, 3] allows same actions (nothing, up, down) with less
+        # computation.
+        action = np.random.choice([1, 2, 3], 1, p=aprob)[0]
 
         observation, reward, done, info = env.step(action)
+        reward_sum += reward
+        rewards.append(reward)
         if done:
             observation = env.reset()
             prev_x = None
