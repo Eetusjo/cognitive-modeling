@@ -11,14 +11,15 @@ import logging
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 import numpy as np
-from tensorboardX import SummaryWriter
 
+from collections import deque
 from keras.models import Sequential
 from keras.layers import Dense, Reshape
 from keras.optimizers import Adam, RMSprop
 from keras.layers.normalization import BatchNormalization
 from keras.layers.core import Flatten
 from keras.layers.convolutional import Convolution2D
+from tensorboardX import SummaryWriter
 
 logging.basicConfig(format="%(asctime)s: %(message)s",
                     datefmt="%d/%m/%Y %I:%M:%S %p",
@@ -112,18 +113,21 @@ def main(args):
     prev_action = None
 
     # Initialize lists for batches
-    x_train, y_train, rewards, action_rewards = [], [], [], []
+    x_train, y_train, rewards = [], [], []
+    # 'action_rewards' contains rewards for same/different action
+    # 'no_movement_rewards' contains rewards for choosing action 1 vs 2,3
+    action_rewards, no_movement_rewards = [], []
 
     # Alpha parameters if using step alpha
     if args.step_alpha:
         alpha, alpha_end, alpha_step, alpha_inter = args.step_alpha
 
     # For smoothing per-episode reward logging
-    running_reward = None
+    reward_history = deque(maxlen=100)
     # Keep track of rewards in episode
     reward_sum = 0
     # Keep track of episode
-    episode_number = 0
+    episode_number = args.start_episode
 
     # Initialize model
     model = learning_model(
@@ -162,6 +166,11 @@ def main(args):
         else:
             action_rewards.append(-1.)
 
+        if action == 1:
+            no_movement_rewards.append(1.)
+        else:
+            no_movement_rewards.append(-1.)
+
         # Store action as one-hot encoded vector
         y = np.zeros([n_actions])
         # -1 compensates for sampling from [1, 3]
@@ -194,6 +203,15 @@ def main(args):
                     # Scale movement constraint weights by alpha
                     discounted = np.add(discounted, alpha*action_rewards)
 
+                # Penalize movement and encourage no-action if beta > 0
+                if args.beta > 0:
+                    no_movement_rewards = np.array(
+                        no_movement_rewards, dtype=np.float
+                    )
+                    discounted = np.add(
+                        discounted, args.beta*no_movement_rewards
+                    )
+
                 # Reset rewards list
                 rewards = []
 
@@ -210,15 +228,16 @@ def main(args):
                 # Save model
                 model.save_weights(path)
 
+            reward_history.append(reward_sum)
             # Reset environment and print the results for this episode
-            running_reward = reward_sum if running_reward is None \
-                else running_reward * 0.99 + reward_sum * 0.01
-            logging.info("Episode: %d. " % episode_number +
-                         "Total Episode Reward: %f. " % reward_sum +
-                         "Running Mean: %f" % running_reward)
+            logging.info(
+                "Episode: %d. " % episode_number +
+                "Total Episode Reward: %f. " % reward_sum +
+                "Running Mean: %f" % (sum(reward_history)/len(reward_history))
+            )
 
             # Update alpha if we are at interval and haven't reached max
-            # (and we're using step_alpha)
+            # (and using step_alpha)
             if args.step_alpha and episode_number % alpha_inter == 0 \
                     and alpha < alpha_end:
                 alpha += alpha_step
@@ -240,6 +259,7 @@ def main(args):
             prev_x = None
             prev_action = None
             action_rewards = []
+            no_movement_rewards = []
 
         # Optionally log per-round stats
         if reward != 0 and args.verbose:
@@ -260,7 +280,8 @@ if __name__ == "__main__":
                              help="See alpha. Controls alpha parameter in a "
                                   "step-wise manner. list of floats: "
                                   "[start, end, step, interval]")
-
+    parser.add_argument("--beta", type=float, default=0.0,
+                        help="Parameter for encouraging no movement")
     parser.add_argument("--gamma", type=float, default=0.99, required=False,
                         help="Parameter for discounting rewards")
     parser.add_argument("--lr", type=float, default=0.001, required=False,
@@ -274,6 +295,9 @@ if __name__ == "__main__":
                         help="Directory for logging model training")
     parser.add_argument("-r", "--resume", default=None,
                         help="Path of pre-trained model")
+    parser.add_argument("--start_episode", default=0,
+                        help="Start training from this episode. Quick fix for "
+                             "not saving proper checkpoint. Change?")
     parser.add_argument("--verbose", action="store_true",
                         help="Verbose logging to stdout")
     args = parser.parse_args()
