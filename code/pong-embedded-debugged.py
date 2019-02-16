@@ -92,9 +92,7 @@ def learning_model(input_dim=80*80, num_actions=3,
 
 
 def mask_visual_field(screen, indices):
-    # If game ongoing, mask visual field
-    if len(indices) > 0:
-        screen[indices, :] = 0
+    screen[indices, :] = 0
     return screen.ravel()
 
 
@@ -116,6 +114,10 @@ def main(args):
     # Initialize lists for batches
     x_train, y_train, rewards, action_rewards = [], [], [], []
 
+    # Alpha parameters if using step alpha
+    if args.step_alpha:
+        alpha, alpha_end, alpha_step, alpha_inter = args.step_alpha
+
     # For smoothing per-episode reward logging
     running_reward = None
     # Keep track of rewards in episode
@@ -136,7 +138,8 @@ def main(args):
         cur_x, mask_indices = pong_preprocess_screen(observation)
         x = cur_x - prev_x if prev_x is not None else np.zeros(input_dim)
 
-        # Mask parts of screen if simulating visual field
+        # Mask parts of screen if simulating visual field. Reshape x to
+        # (80, 80) because pong_preprocess_screen returns flattened array
         x = mask_visual_field(x.reshape(80, 80), mask_indices) \
             if args.visual_field else x
 
@@ -181,11 +184,15 @@ def main(args):
                 # Calculate weights for rewards ("discount")
                 discounted = discount_rewards(np.vstack(rewards), args.gamma)
 
-                # Use movement contraings if parameter > 0
-                if args.alpha > 0:
+                # Use movement contraings if alpha set and  > 0
+                if (args.alpha and args.alpha > 0):
                     action_rewards = np.array(action_rewards, dtype=np.float)
                     # Scale movement constraint weights by alpha
                     discounted = np.add(discounted, args.alpha*action_rewards)
+                elif args.step_alpha:
+                    action_rewards = np.array(action_rewards, dtype=np.float)
+                    # Scale movement constraint weights by alpha
+                    discounted = np.add(discounted, alpha*action_rewards)
 
                 # Reset rewards list
                 rewards = []
@@ -210,6 +217,19 @@ def main(args):
                          "Total Episode Reward: %f. " % reward_sum +
                          "Running Mean: %f" % running_reward)
 
+            # Update alpha if we are at interval and haven't reached max
+            # (and we're using step_alpha)
+            if args.step_alpha and episode_number % alpha_inter == 0 \
+                    and alpha < alpha_end:
+                alpha += alpha_step
+                if alpha < alpha_end:
+                    logging.info("Updating alpha-value at interval. "
+                                 "New alpha: {}".format(alpha))
+                else:
+                    logging.info("Updating alpha-value at interval. "
+                                 "Reached max alpha defined by user. "
+                                 "Final alpha: {}".format(alpha))
+
             # Log rewards for this episode using tensorboardX
             writer.add_scalar("reward", reward_sum, episode_number)
 
@@ -231,9 +251,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-n", "--name", default="pong",
                         help="Name for experiment. Used for saving model.")
-    # Model definition
-    parser.add_argument("--alpha", type=float, default=0.0, required=False,
-                        help="Controls the strength of movement constraints")
+
+    alpha_group = parser.add_mutually_exclusive_group(required=False)
+    alpha_group.add_argument("--alpha", type=float, default=None,
+                             help="Strength of movement constraints")
+    alpha_group.add_argument("--step_alpha", type=float, nargs=4,
+                             default=None,
+                             help="See alpha. Controls alpha parameter in a "
+                                  "step-wise manner. list of floats: "
+                                  "[start, end, step, interval]")
+
     parser.add_argument("--gamma", type=float, default=0.99, required=False,
                         help="Parameter for discounting rewards")
     parser.add_argument("--lr", type=float, default=0.001, required=False,
