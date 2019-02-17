@@ -295,7 +295,7 @@ if __name__ == "__main__":
                         help="Directory for logging model training")
     parser.add_argument("-r", "--resume", default=None,
                         help="Path of pre-trained model")
-    parser.add_argument("--start_episode", default=0,
+    parser.add_argument("--start_episode", default=0, type=int,
                         help="Start training from this episode. Quick fix for "
                              "not saving proper checkpoint. Change?")
     parser.add_argument("--verbose", action="store_true",
