@@ -4,13 +4,14 @@
 #
 # Ported to Python 3 by Jami Pekkanen
 # Tested with the theano backend (tensorflow has issues with Python 3.7)
-import os
-import gym
 import argparse
+import cv2
+import gym
 import logging
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 import numpy as np
+import os
 
 from collections import deque
 from keras.models import Sequential
@@ -46,9 +47,11 @@ def pong_preprocess_screen(screen):
     # Get the correct column to retrieve paddle position
     paddle_column = screen[:, 71]
     # Get correct rows for maskig (exclude paddle position)
-    indices = np.where(paddle_column != 1)[0]
+    mask_indices = np.where(paddle_column != 1)[0]
+    # Get paddle indices separately
+    paddle_indices = np.where(paddle_column == 1)[0]
     # Return processed screen and rows to be masked
-    return screen.astype(np.float).ravel(), indices
+    return screen.astype(np.float).ravel(), mask_indices, paddle_indices
 
 
 def discount_rewards(r, gamma):
@@ -93,8 +96,28 @@ def learning_model(input_dim=80*80, num_actions=3,
 
 
 def mask_visual_field(screen, indices):
-    screen[indices, :] = 0
+    screen[indices, :] = 0.5
     return screen.ravel()
+
+
+def blur_visual_field(img, paddle_indices):
+    # FIXME: Inefficient
+    heavy = cv2.GaussianBlur(img, (27, 27), 0)
+    medium = cv2.GaussianBlur(img, (19, 19), 0)
+    light = cv2.GaussianBlur(img, (11, 11), 0)
+
+    light_start = max(paddle_indices[0] - 10, 0)
+    light_end = min(paddle_indices[-1] + 10, 79)
+
+    medium_start = max(light_start - 10, 0)
+    medium_end = min(light_end + 10, 79)
+
+    blurred = heavy
+    blurred[medium_start:medium_end] = medium[medium_start:medium_end]
+    blurred[light_start:light_end] = light[light_start:light_end]
+    blurred[paddle_indices] = img[paddle_indices]
+
+    return blurred.ravel()
 
 
 def main(args):
@@ -139,13 +162,22 @@ def main(args):
         if render:
             env.render()
         # Preprocess, consider the frame difference as features
-        cur_x, mask_indices = pong_preprocess_screen(observation)
+        cur_x, mask_indices, paddle_indices \
+            = pong_preprocess_screen(observation)
         x = cur_x - prev_x if prev_x is not None else np.zeros(input_dim)
 
         # Mask parts of screen if simulating visual field. Reshape x to
         # (80, 80) because pong_preprocess_screen returns flattened array
-        x = mask_visual_field(x.reshape(80, 80), mask_indices) \
-            if args.visual_field else x
+        if args.masked_vision or args.visual_field:
+            x = mask_visual_field(x.reshape(80, 80), mask_indices)
+        elif args.blurred_vision:
+            x = blur_visual_field(x.reshape(80, 80), paddle_indices)
+        elif args.relative_vision:
+            raise NotImplementedError(
+                "Blurred vision with relative information not implemented.")
+        elif args.two_channel_vision:
+            raise NotImplementedError(
+                "Two-channel vision not implemented.")
 
         # Set current (non-masked) screen as previous
         prev_x = cur_x
@@ -272,6 +304,19 @@ if __name__ == "__main__":
     parser.add_argument("-n", "--name", default="pong",
                         help="Name for experiment. Used for saving model.")
 
+    visual_group = parser.add_mutually_exclusive_group(required=False)
+    visual_group.add_argument("--visual_field", action="store_true",
+                              help="See 'masked_vision' (DEPRECATED)")
+    visual_group.add_argument("--masked_vision", action="store_true",
+                              help="Use masked field of vision")
+    visual_group.add_argument("--blurred_vision", action="store_true",
+                              help="Use blurred field of vision")
+    visual_group.add_argument("--relative_vision", action="store_true",
+                              help="Use blurred field of vision with relative "
+                                   "position of ball")
+    visual_group.add_argument("--two_channel_vision", action="store_true",
+                              help="Use two-channel vision")
+
     alpha_group = parser.add_mutually_exclusive_group(required=False)
     alpha_group.add_argument("--alpha", type=float, default=None,
                              help="Strength of movement constraints")
@@ -280,14 +325,14 @@ if __name__ == "__main__":
                              help="See alpha. Controls alpha parameter in a "
                                   "step-wise manner. list of floats: "
                                   "[start, end, step, interval]")
+
     parser.add_argument("--beta", type=float, default=0.0,
                         help="Parameter for encouraging no movement")
     parser.add_argument("--gamma", type=float, default=0.99, required=False,
                         help="Parameter for discounting rewards")
     parser.add_argument("--lr", type=float, default=0.001, required=False,
                         help="Learning rate for training.")
-    parser.add_argument("--visual_field", action="store_true",
-                        help="Use a restricted visual field for paddle")
+
     # Args related to training, saving and logging
     parser.add_argument("-s", "--savedir", default="./saved/",
                         help="Directory for saving models")
