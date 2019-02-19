@@ -120,6 +120,24 @@ def blur_visual_field(img, paddle_indices):
     return blurred.ravel()
 
 
+def get_ball_y(self, env):
+    """Retrieve ball y-position.
+
+    Adapted from Jami Pekkanen.
+    Source: https://github.com/jampekka/Keras-Pong/blob/master/keras_pong_2.py
+    """
+    # This reads the paddle and ball positions directly from the
+    # atari emulator's memory. Note that these are available even when
+    # the ball is invisible between rounds (when it goes all the way up).
+    # This hampers the learning somewhat as the paddle tends to go to up
+    # in the beginning.
+
+    # idx = [4, 12, 21, 49, 50, 51, 54, 56, 58, 60, 64, 67, 121, 122]
+    idx = [54, 49, 21, 51]
+    bally, ballx, oppy, playery = env._get_ram()[idx].astype(float)/206 - 0.5
+    return bally
+
+
 def main(args):
     # Initialize tensorboardX writer
     writer = SummaryWriter("{}/{}/".format(args.logdir, args.name))
