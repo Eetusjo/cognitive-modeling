@@ -14,11 +14,11 @@ import numpy as np
 import os
 
 from collections import deque
-from keras.models import Sequential
-from keras.layers import Dense, Reshape
+from keras.models import Sequential, Model
+from keras.layers import Dense, Reshape, Concatenate
 from keras.optimizers import Adam, RMSprop
 from keras.layers.normalization import BatchNormalization
-from keras.layers.core import Flatten
+from keras.layers.core import Flatten, Input
 from keras.layers.convolutional import Convolution2D
 from tensorboardX import SummaryWriter
 
@@ -95,8 +95,36 @@ def learning_model(input_dim=80*80, num_actions=3,
     return model
 
 
+def model(model_type="shallow_cnn", two_channel=False, lr=0.001, resume=None):
+    input_shape = (2 if two_channel else 1, 80, 80)
+    if model_type == "shallow_cnn":
+        input_screen = Input(shape=input_shape)
+        input_feats = Input(shape=(1,))
+        # Feed screen through convolutional net
+        x = Convolution2D(32, 9, 9, subsample=(4, 4), border_mode='same',
+                          activation='relu', init='he_uniform')(input_screen)
+        # Flatten CNN output
+        x = Flatten()(x)
+        # Concantenate CNN output and extra input features
+        x = Concatenate([x, input_feats])
+        # First layer of MLP
+        x = Dense(16, activation='relu', init='he_uniform')(x)
+        # Output layers with logprobs for actions
+        out = Dense(3, activation='softmax')(x)
+    elif model_type == "deep_cnn":
+        raise NotImplementedError("Deep CNN model not implemented.")
+
+    model = Model(inputs=[input_screen, input_feats], outputs=out)
+    model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=lr))
+
+    if resume:
+        model.load_weights(resume)
+
+    return model
+
+
 def mask_visual_field(screen, indices):
-    screen[indices, :] = 0.5
+    screen[indices, :] = 0.0
     return screen.ravel()
 
 
