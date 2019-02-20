@@ -3,7 +3,9 @@
 # and uses Keras.
 #
 # Ported to Python 3 by Jami Pekkanen
-# Tested with the theano backend (tensorflow has issues with Python 3.7)
+#
+# Substantially refactored and extended by Eetu Sjöblom and Group Epsilon
+
 import argparse
 import cv2
 import gym
@@ -15,10 +17,10 @@ import os
 
 from collections import deque
 from keras.models import Sequential, Model
-from keras.layers import Dense, Reshape, Concatenate
+from keras.layers import Dense, Reshape, Concatenate, Input, Conv2D, Activation
 from keras.optimizers import Adam, RMSprop
 from keras.layers.normalization import BatchNormalization
-from keras.layers.core import Flatten, Input
+from keras.layers.core import Flatten
 from keras.layers.convolutional import Convolution2D
 from tensorboardX import SummaryWriter
 
@@ -27,8 +29,6 @@ logging.basicConfig(format="%(asctime)s: %(message)s",
                     level=logging.DEBUG)
 
 # Script Parameters
-# FIXME: Eventually move all of this somewhere else
-input_dim = 80 * 80
 update_frequency = 1
 render = False
 
@@ -51,7 +51,7 @@ def pong_preprocess_screen(screen):
     # Get paddle indices separately
     paddle_indices = np.where(paddle_column == 1)[0]
     # Return processed screen and rows to be masked
-    return screen.astype(np.float).ravel(), mask_indices, paddle_indices
+    return screen.astype(np.float), mask_indices, paddle_indices
 
 
 def discount_rewards(r, gamma):
@@ -68,53 +68,70 @@ def discount_rewards(r, gamma):
     return discounted_r.ravel()
 
 
-def learning_model(input_dim=80*80, num_actions=3,
-                   model_type="shallow_cnn", lr=0.001, resume=None):
-    model = Sequential()
-    if model_type == "mlp":
-        model.add(Reshape((1, 80, 80), input_shape=(input_dim,)))
-        model.add(Flatten())
-        model.add(Dense(200, activation='relu'))
-        model.add(Dense(num_actions, activation='softmax'))
-        opt = RMSprop(lr=lr)
-    elif model_type == "shallow_cnn":
-        model.add(Reshape((1, 80, 80), input_shape=(input_dim,)))
-        model.add(Convolution2D(32, 9, 9, subsample=(4, 4), border_mode='same',
-                                activation='relu', init='he_uniform'))
-        model.add(Flatten())
-        model.add(Dense(16, activation='relu', init='he_uniform'))
-        model.add(Dense(num_actions, activation='softmax'))
-        opt = Adam(lr=lr)
-    elif model_type == "deep_cnn":
-        raise NotImplementedError("Deep CNN model not implemented.")
-
-    model.compile(loss='categorical_crossentropy', optimizer=opt)
-    if resume:
-        model.load_weights(resume)
-
-    return model
-
-
-def model(model_type="shallow_cnn", two_channel=False, lr=0.001, resume=None):
+def get_model(model_type="shallow_cnn", two_channel=False, ball_position=False,
+              lr=0.001, resume=None):
     input_shape = (2 if two_channel else 1, 80, 80)
     if model_type == "shallow_cnn":
         input_screen = Input(shape=input_shape)
-        input_feats = Input(shape=(1,))
         # Feed screen through convolutional net
         x = Convolution2D(32, 9, 9, subsample=(4, 4), border_mode='same',
                           activation='relu', init='he_uniform')(input_screen)
         # Flatten CNN output
         x = Flatten()(x)
-        # Concantenate CNN output and extra input features
-        x = Concatenate([x, input_feats])
+
+        # If feeding in ball position as well
+        if ball_position:
+            input_feats = Input(shape=(1,))
+            # Concantenate CNN output and extra input features
+            x = Concatenate()([x, input_feats])
+
         # First layer of MLP
-        x = Dense(16, activation='relu', init='he_uniform')(x)
+        x = Dense(32, activation='relu', init='he_uniform')(x)
         # Output layers with logprobs for actions
         out = Dense(3, activation='softmax')(x)
     elif model_type == "deep_cnn":
-        raise NotImplementedError("Deep CNN model not implemented.")
+        input_screen = Input(shape=input_shape)
+        # Feed screen through convolutional net
+        x = Conv2D(
+            filters=32, kernel_size=3, strides=1, padding='same',
+            use_bias=True, activation=None, kernel_initializer='he_uniform'
+        )(input_screen)
+        x = BatchNormalization(axis=1)(x)
+        x = Activation("relu")(x)
+        x = Conv2D(
+            filters=32, kernel_size=3, strides=1, padding='same',
+            use_bias=True, activation=None, kernel_initializer='he_uniform'
+        )(x)
+        x = BatchNormalization(axis=1)(x)
+        x = Activation("relu")(x)
+        x = Conv2D(
+            filters=32, kernel_size=3, strides=2, padding='same',
+            use_bias=True, activation=None, kernel_initializer='he_uniform'
+        )(x)
+        x = BatchNormalization(axis=1)(x)
+        x = Activation("relu")(x)
+        x = Conv2D(
+            filters=32, kernel_size=3, strides=3, padding='same',
+            use_bias=True, activation=None, kernel_initializer='he_uniform'
+        )(x)
+        x = BatchNormalization(axis=1)(x)
+        x = Activation("relu")(x)
+        # Flatten CNN output
+        x = Flatten()(x)
 
-    model = Model(inputs=[input_screen, input_feats], outputs=out)
+        # If feeding in ball position as well
+        if ball_position:
+            input_feats = Input(shape=(1,))
+            # Concantenate CNN output and extra input features
+            x = Concatenate()([x, input_feats])
+
+        # First layer of MLP
+        x = Dense(32, activation='relu', kernel_initializer='he_uniform')(x)
+        # Output layers with logprobs for actions
+        out = Dense(3, activation='softmax')(x)
+
+    model = Model(inputs=[input_screen, input_feats], outputs=out) \
+        if ball_position else Model(inputs=input_screen, outputs=out)
     model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=lr))
 
     if resume:
@@ -124,12 +141,13 @@ def model(model_type="shallow_cnn", two_channel=False, lr=0.001, resume=None):
 
 
 def mask_visual_field(screen, indices):
-    screen[indices, :] = 0.0
-    return screen.ravel()
+    screen[:, :, indices, :] = 0.0
+    return screen
 
 
 def blur_visual_field(img, paddle_indices):
     # FIXME: Inefficient
+    img = img.reshape(80, 80)
     heavy = cv2.GaussianBlur(img, (27, 27), 0)
     medium = cv2.GaussianBlur(img, (19, 19), 0)
     light = cv2.GaussianBlur(img, (11, 11), 0)
@@ -145,11 +163,11 @@ def blur_visual_field(img, paddle_indices):
     blurred[light_start:light_end] = light[light_start:light_end]
     blurred[paddle_indices] = img[paddle_indices]
 
-    return blurred.ravel()
+    return blurred.reshape(1, 1, 80, 80)
 
 
-def get_ball_y(self, env):
-    """Retrieve ball y-position.
+def get_ball_relative(env):
+    """Get ball position relative (above/below) to paddle position.
 
     Adapted from Jami Pekkanen.
     Source: https://github.com/jampekka/Keras-Pong/blob/master/keras_pong_2.py
@@ -162,8 +180,14 @@ def get_ball_y(self, env):
 
     # idx = [4, 12, 21, 49, 50, 51, 54, 56, 58, 60, 64, 67, 121, 122]
     idx = [54, 49, 21, 51]
-    bally, ballx, oppy, playery = env._get_ram()[idx].astype(float)/206 - 0.5
-    return bally
+    bally, ballx, oppy, playery = env._get_ram()[idx].astype(float)/206
+
+    if bally <= 0 or bally == playery:
+        return 0
+    elif bally < playery:
+        return -1
+    else:
+        return 1
 
 
 def main(args):
@@ -171,7 +195,7 @@ def main(args):
     writer = SummaryWriter("{}/{}/".format(args.logdir, args.name))
     # Initialize gym environment
     env = gym.make("Pong-v0")
-    # Number of actions allowed (NOTHING, UP. DOWN)
+    # Number of actions allowed (NOTHING, UP, DOWN)
     n_actions = 3
     # Reset env and get first screen
     observation = env.reset()
@@ -182,7 +206,7 @@ def main(args):
     prev_action = None
 
     # Initialize lists for batches
-    x_train, y_train, rewards = [], [], []
+    x_train, y_train, rewards, ball_rels = [], [], [], []
     # 'action_rewards' contains rewards for same/different action
     # 'no_movement_rewards' contains rewards for choosing action 1 vs 2,3
     action_rewards, no_movement_rewards = [], []
@@ -199,9 +223,8 @@ def main(args):
     episode_number = args.start_episode
 
     # Initialize model
-    model = learning_model(
-        num_actions=n_actions, resume=args.resume, lr=args.lr
-    )
+    model = get_model(resume=args.resume, lr=args.lr, model_type=args.model,
+                      ball_position=True if args.relative_vision else False)
 
     # Begin training
     while True:
@@ -210,17 +233,21 @@ def main(args):
         # Preprocess, consider the frame difference as features
         cur_x, mask_indices, paddle_indices \
             = pong_preprocess_screen(observation)
-        x = cur_x - prev_x if prev_x is not None else np.zeros(input_dim)
+        # Reshape to (batch, channels, height, width)
+        cur_x = cur_x.reshape((1, 1, 80, 80))
+        x = cur_x - prev_x if prev_x is not None \
+            else np.zeros((1, 1, 80, 80))
 
         # Mask parts of screen if simulating visual field. Reshape x to
         # (80, 80) because pong_preprocess_screen returns flattened array
         if args.masked_vision or args.visual_field:
-            x = mask_visual_field(x.reshape(80, 80), mask_indices)
+            x = mask_visual_field(x, mask_indices)
         elif args.blurred_vision:
-            x = blur_visual_field(x.reshape(80, 80), paddle_indices)
+            x = blur_visual_field(x, paddle_indices)
         elif args.relative_vision:
-            raise NotImplementedError(
-                "Blurred vision with relative information not implemented.")
+            x = mask_visual_field(x, mask_indices)
+            ball_relative = get_ball_relative(env.unwrapped)
+            ball_rels.append(ball_relative)
         elif args.two_channel_vision:
             raise NotImplementedError(
                 "Two-channel vision not implemented.")
@@ -231,7 +258,10 @@ def main(args):
         x_train.append(x)
 
         # Predict probabilities for actions using the model
-        aprob = model.predict(x.reshape([1, -1]), batch_size=1).flatten()
+        aprob = model.predict(
+            [x, np.array([ball_relative])] if args.relative_vision else x,
+            batch_size=1
+        ).flatten()
         # Sample action. Original samples from [0, 5], but {0, 1, 4, 5} do
         # nothing. Sampling from [1, 3] allows same actions (nothing, up, down)
         # with less computation.
@@ -294,11 +324,18 @@ def main(args):
                 rewards = []
 
                 # Train on this batch, weighting samples by discounted rewards
-                model.train_on_batch(np.squeeze(np.vstack(x_train)),
-                                     np.vstack(y_train),
-                                     sample_weight=discounted)
+                if args.relative_vision:
+                    model.train_on_batch(
+                        [np.vstack(x_train), np.vstack(ball_rels)],
+                        np.vstack(y_train),
+                        sample_weight=discounted
+                    )
+                else:
+                    model.train_on_batch(np.vstack(x_train),
+                                         np.vstack(y_train),
+                                         sample_weight=discounted)
                 # Clear the batch
-                x_train, y_train = [], []
+                x_train, y_train, ball_rels = [], [], []
                 # Save a checkpoint of the model
                 path = '{}/{}.h5'.format(args.savedir, args.name)
                 # Remove old model checkpoint
@@ -349,6 +386,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-n", "--name", default="pong",
                         help="Name for experiment. Used for saving model.")
+    parser.add_argument("-m", "--model", default="shallow_cnn",
+                        choices=["shallow_cnn", "deep_cnn"],
+                        help="Name for experiment. Used for saving model.")
 
     visual_group = parser.add_mutually_exclusive_group(required=False)
     visual_group.add_argument("--visual_field", action="store_true",
@@ -358,7 +398,7 @@ if __name__ == "__main__":
     visual_group.add_argument("--blurred_vision", action="store_true",
                               help="Use blurred field of vision")
     visual_group.add_argument("--relative_vision", action="store_true",
-                              help="Use blurred field of vision with relative "
+                              help="Use masked field of vision with relative "
                                    "position of ball")
     visual_group.add_argument("--two_channel_vision", action="store_true",
                               help="Use two-channel vision")
