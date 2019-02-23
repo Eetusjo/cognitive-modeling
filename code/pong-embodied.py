@@ -412,7 +412,7 @@ if __name__ == "__main__":
     parser.add_argument("-n", "--name", default="pong",
                         help="Name for experiment. Used for saving model.")
     parser.add_argument("-m", "--model", default="shallow_cnn",
-                        choices=["shallow_cnn", "deep_cnn"],
+                        choices=["shallow_cnn", "deep_cnn", "small_cnn"],
                         help="Name for experiment. Used for saving model.")
 
     visual_group = parser.add_mutually_exclusive_group(required=False)
