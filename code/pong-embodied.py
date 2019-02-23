@@ -93,25 +93,25 @@ def get_model(model_type="shallow_cnn", two_channel=False, ball_position=False,
         input_screen = Input(shape=input_shape)
         # Feed screen through convolutional net
         x = Conv2D(
-            filters=32, kernel_size=3, strides=1, padding='same',
+            filters=32, kernel_size=3, strides=2, padding='same',
             use_bias=True, activation=None, kernel_initializer='he_uniform'
         )(input_screen)
         x = BatchNormalization(axis=1)(x)
         x = Activation("relu")(x)
         x = Conv2D(
-            filters=32, kernel_size=3, strides=1, padding='same',
+            filters=16, kernel_size=3, strides=2, padding='same',
             use_bias=True, activation=None, kernel_initializer='he_uniform'
         )(x)
         x = BatchNormalization(axis=1)(x)
         x = Activation("relu")(x)
         x = Conv2D(
-            filters=32, kernel_size=3, strides=2, padding='same',
+            filters=16, kernel_size=4, strides=2, padding='same',
             use_bias=True, activation=None, kernel_initializer='he_uniform'
         )(x)
         x = BatchNormalization(axis=1)(x)
         x = Activation("relu")(x)
         x = Conv2D(
-            filters=32, kernel_size=3, strides=3, padding='same',
+            filters=16, kernel_size=5, strides=2, padding='same',
             use_bias=True, activation=None, kernel_initializer='he_uniform'
         )(x)
         x = BatchNormalization(axis=1)(x)
@@ -126,7 +126,7 @@ def get_model(model_type="shallow_cnn", two_channel=False, ball_position=False,
             x = Concatenate()([x, input_feats])
 
         # First layer of MLP
-        x = Dense(32, activation='relu', kernel_initializer='he_uniform')(x)
+        x = Dense(64, activation='relu', kernel_initializer='he_uniform')(x)
         # Output layers with logprobs for actions
         out = Dense(3, activation='softmax')(x)
 
@@ -150,7 +150,7 @@ def blur_visual_field(img, paddle_indices):
     img = img.reshape(80, 80)
     heavy = cv2.GaussianBlur(img, (27, 27), 0)
     medium = cv2.GaussianBlur(img, (19, 19), 0)
-    light = cv2.GaussianBlur(img, (11, 11), 0)
+    light = cv2.GaussianBlur(img, (5, 5), 0)
 
     light_start = max(paddle_indices[0] - 10, 0)
     light_end = min(paddle_indices[-1] + 10, 79)
@@ -220,7 +220,7 @@ def main(args):
     # Keep track of rewards in episode
     reward_sum = 0
     # Keep track of episode
-    episode_number = args.start_episode
+    episode_number = args.start_episode - 1
 
     # Initialize model
     model = get_model(resume=args.resume, lr=args.lr, model_type=args.model,
