@@ -86,7 +86,32 @@ def get_model(model_type="shallow_cnn", two_channel=False, ball_position=False,
             x = Concatenate()([x, input_feats])
 
         # First layer of MLP
-        x = Dense(32, activation='relu', init='he_uniform')(x)
+        x = Dense(64, activation='relu', init='he_uniform')(x)
+        # Output layers with logprobs for actions
+        out = Dense(3, activation='softmax')(x)
+    elif "small_cnn":
+        input_screen = Input(shape=input_shape)
+        # Feed screen through convolutional net
+        x = Conv2D(
+            filters=32, kernel_size=5, strides=3, padding='same',
+            use_bias=True, activation="relu", kernel_initializer='he_uniform'
+        )(input_screen)
+        x = Conv2D(
+            filters=32, kernel_size=9, strides=5, padding='same',
+            use_bias=True, activation="relu", kernel_initializer='he_uniform'
+        )(x)
+
+        # Flatten CNN output
+        x = Flatten()(x)
+
+        # If feeding in ball position as well
+        if ball_position:
+            input_feats = Input(shape=(1,))
+            # Concantenate CNN output and extra input features
+            x = Concatenate()([x, input_feats])
+
+        # First layer of MLP
+        x = Dense(64, activation='relu', kernel_initializer='he_uniform')(x)
         # Output layers with logprobs for actions
         out = Dense(3, activation='softmax')(x)
     elif model_type == "deep_cnn":
