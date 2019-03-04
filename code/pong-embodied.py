@@ -155,8 +155,12 @@ def get_model(model_type="shallow_cnn", two_channel=False, ball_position=False,
         # Output layers with logprobs for actions
         out = Dense(3, activation='softmax')(x)
 
-    model = Model(inputs=[input_screen, input_feats], outputs=out) \
-        if ball_position else Model(inputs=input_screen, outputs=out)
+    # This in case relativw ball position included as input
+    if ball_position:
+        model = Model(inputs=[input_screen, input_feats], outputs=out)
+    else:
+        model = Model(inputs=input_screen, outputs=out)
+
     model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=lr))
 
     if resume:
@@ -249,7 +253,15 @@ def main(args):
 
     # Initialize model
     model = get_model(resume=args.resume, lr=args.lr, model_type=args.model,
-                      ball_position=True if args.relative_vision else False)
+                      ball_position=args.relative_vision,
+                      two_channel=args.two_channel_vision)
+
+    # Print model summary
+    model.summary(print_fn=logging.info)
+    # Ensure saving and logging dirs
+    for dr in [args.savedir, args.logdir]:
+        if not os.path.isdir(dr):
+            os.mkdir(dr)
 
     # Begin training
     while True:
@@ -274,8 +286,7 @@ def main(args):
             ball_relative = get_ball_relative(env.unwrapped)
             ball_rels.append(ball_relative)
         elif args.two_channel_vision:
-            raise NotImplementedError(
-                "Two-channel vision not implemented.")
+            x = np.concatenate([x, cur_x], axis=1)
 
         # Set current (non-masked) screen as previous
         prev_x = cur_x
