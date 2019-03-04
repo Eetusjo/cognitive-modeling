@@ -260,8 +260,8 @@ def main(args):
     model.summary(print_fn=logging.info)
     # Ensure saving and logging dirs
     for dr in [args.savedir, args.logdir]:
-        if not os.path.isdir(dr):
-            os.mkdir(dr)
+        if not os.path.exists(dr):
+            os.makedirs(dr)
 
     # Begin training
     while True:
