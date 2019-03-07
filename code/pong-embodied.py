@@ -89,7 +89,7 @@ def get_model(model_type="shallow_cnn", two_channel=False, ball_position=False,
         x = Dense(64, activation='relu', init='he_uniform')(x)
         # Output layers with logprobs for actions
         out = Dense(3, activation='softmax')(x)
-    elif "small_cnn":
+    elif model_type == "small_cnn":
         input_screen = Input(shape=input_shape)
         # Feed screen through convolutional net
         x = Conv2D(
