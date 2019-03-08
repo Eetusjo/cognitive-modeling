@@ -491,7 +491,7 @@ if __name__ == "__main__":
                                  "[start, end, step, interval]")
     parser.add_argument("--gamma", type=float, default=0.99, required=False,
                         help="Parameter for discounting rewards")
-    parser.add_argument("--lr", type=float, default=0.001, required=False,
+    parser.add_argument("--lr", type=float, default=0.0002, required=False,
                         help="Learning rate for training.")
 
     # Args related to training, saving and logging
