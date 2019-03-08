@@ -228,7 +228,8 @@ def main(args):
 
     # Initialize model
     model = get_model(resume=args.resume, lr=0, model_type=args.model,
-                      ball_position=True if args.relative_vision else False)
+                      ball_position=args.relative_vision,
+                      two_channel=args.two_channel_vision)
 
     # Begin training
     while True:
@@ -253,8 +254,7 @@ def main(args):
             x = mask_visual_field(x, mask_indices)
             ball_relative = get_ball_relative(env.unwrapped)
         elif args.two_channel_vision:
-            raise NotImplementedError(
-                "Two-channel vision not implemented.")
+            x = np.concatenate([x, cur_x], axis=1)
 
         # Set current (non-masked) screen as previous
         prev_x = cur_x

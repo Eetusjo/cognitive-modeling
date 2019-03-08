@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 import numpy as np
 import os
+import random
 
 from collections import deque
 from keras.models import Sequential, Model
@@ -244,6 +245,9 @@ def main(args):
     if args.step_alpha:
         alpha, alpha_end, alpha_step, alpha_inter = args.step_alpha
 
+    if args.step_beta:
+        beta, beta_end, beta_step, beta_inter = args.step_beta
+
     # For smoothing per-episode reward logging
     reward_history = deque(maxlen=100)
     # Keep track of rewards in episode
@@ -348,28 +352,47 @@ def main(args):
                     discounted = np.add(discounted, alpha*action_rewards)
 
                 # Penalize movement and encourage no-action if beta > 0
-                if args.beta > 0:
+                if args.beta and args.beta > 0:
                     no_movement_rewards = np.array(
                         no_movement_rewards, dtype=np.float
                     )
                     discounted = np.add(
                         discounted, args.beta*no_movement_rewards
                     )
+                elif args.step_beta:
+                    no_movement_rewards = np.array(
+                        no_movement_rewards, dtype=np.float
+                    )
+                    discounted = np.add(
+                        discounted, beta*no_movement_rewards
+                    )
+
+                x_train = np.vstack(x_train)
+                y_train = np.vstack(y_train)
+
+                if args.sample_batch:
+                    total_steps = len(rewards)
+                    n = min(total_steps, args.sample_batch)
+                    samples = random.sample(range(total_steps), n)
+                    x_train = x_train[samples]
+                    y_train = y_train[samples]
+                    discounted = discounted[samples]
+
+                if args.relative_vision:
+                    ball_rels = np.vstack(ball_rels)
+                    if args.sample_batch:
+                        ball_rels = ball_rels[samples]
+                    x_train = [x_train, ball_rels]
 
                 # Reset rewards list
                 rewards = []
 
                 # Train on this batch, weighting samples by discounted rewards
-                if args.relative_vision:
-                    model.train_on_batch(
-                        [np.vstack(x_train), np.vstack(ball_rels)],
-                        np.vstack(y_train),
-                        sample_weight=discounted
-                    )
-                else:
-                    model.train_on_batch(np.vstack(x_train),
-                                         np.vstack(y_train),
-                                         sample_weight=discounted)
+                model.train_on_batch(
+                    x_train, y_train,
+                    sample_weight=discounted
+                )
+
                 # Clear the batch
                 x_train, y_train, ball_rels = [], [], []
                 # Save a checkpoint of the model
@@ -399,6 +422,17 @@ def main(args):
                     logging.info("Updating alpha-value at interval. "
                                  "Reached max alpha defined by user. "
                                  "Final alpha: {}".format(alpha))
+
+            if args.step_beta and episode_number % beta_inter == 0 \
+                    and beta < beta_end:
+                beta += beta_step
+                if beta < beta_end:
+                    logging.info("Updating beta-value at interval. "
+                                 "New beta: {}".format(beta))
+                else:
+                    logging.info("Updating beta-value at interval. "
+                                 "Reached max beta defined by user. "
+                                 "Final value: {}".format(beta))
 
             # Log rewards for this episode using tensorboardX
             writer.add_scalar("reward", reward_sum, episode_number)
@@ -447,15 +481,23 @@ if __name__ == "__main__":
                              help="See alpha. Controls alpha parameter in a "
                                   "step-wise manner. list of floats: "
                                   "[start, end, step, interval]")
-
-    parser.add_argument("--beta", type=float, default=0.0,
-                        help="Parameter for encouraging no movement")
+    beta_group = parser.add_mutually_exclusive_group(required=False)
+    beta_group.add_argument("--beta", type=float, default=None,
+                            help="Parameter for encouraging no movement")
+    beta_group.add_argument("--step_beta", type=float, nargs=4,
+                            default=None,
+                            help="See beta. Controls beta parameter in a "
+                                 "step-wise manner. list of floats: "
+                                 "[start, end, step, interval]")
     parser.add_argument("--gamma", type=float, default=0.99, required=False,
                         help="Parameter for discounting rewards")
     parser.add_argument("--lr", type=float, default=0.001, required=False,
                         help="Learning rate for training.")
 
     # Args related to training, saving and logging
+    parser.add_argument("--sample_batch", type=int, default=None,
+                        help="Sample 'n' time-steps to train on instead of "
+                             "training on all accumulated steps.")
     parser.add_argument("-s", "--savedir", default="./saved/",
                         help="Directory for saving models")
     parser.add_argument("-l", "--logdir", default="./log/",
