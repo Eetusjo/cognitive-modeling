@@ -17,4 +17,4 @@ You train a model simply by running the script `pong-embodied.py`:
 
 ```python pong-embodied.py -n {experiment-name}```
 
-The script admits several arguments for experimenting with different training parameters and restrictions. As usual, run `python pong-embodied.py -h` details.
+The script admits several arguments for experimenting with different training parameters and restrictions. As usual, run `python pong-embodied.py -h` for details.
