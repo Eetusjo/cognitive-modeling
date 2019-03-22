@@ -114,25 +114,25 @@ def get_model(model_type="shallow_cnn", two_channel=False, ball_position=False,
         # Feed screen through convolutional net
         x = Conv2D(
             filters=32, kernel_size=9, strides=1, padding='same',
-            use_bias=True, activation=None, kernel_initializer='he_uniform'
+            use_bias=True, activation="relu", kernel_initializer='he_uniform'
         )(input_screen)
         x = BatchNormalization(axis=1)(x)
         x = Activation("relu")(x)
         x = Conv2D(
             filters=32, kernel_size=7, strides=1, padding='same',
-            use_bias=True, activation=None, kernel_initializer='he_uniform'
+            use_bias=True, activation="relu", kernel_initializer='he_uniform'
         )(x)
         x = BatchNormalization(axis=1)(x)
         x = Activation("relu")(x)
         x = Conv2D(
             filters=32, kernel_size=5, strides=1, padding='same',
-            use_bias=True, activation=None, kernel_initializer='he_uniform'
+            use_bias=True, activation="relu", kernel_initializer='he_uniform'
         )(x)
         x = BatchNormalization(axis=1)(x)
         x = Activation("relu")(x)
         x = Conv2D(
             filters=32, kernel_size=5, strides=1, padding='same',
-            use_bias=True, activation=None, kernel_initializer='he_uniform'
+            use_bias=True, activation="relu", kernel_initializer='he_uniform'
         )(x)
         x = BatchNormalization(axis=1)(x)
         x = Activation("relu")(x)
