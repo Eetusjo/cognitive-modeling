@@ -10,8 +10,6 @@ import argparse
 import cv2
 import gym
 import logging
-import matplotlib.pyplot as plt
-import matplotlib.image as mpimg
 import numpy as np
 import os
 import random
@@ -28,10 +26,6 @@ from tensorboardX import SummaryWriter
 logging.basicConfig(format="%(asctime)s: %(message)s",
                     datefmt="%d/%m/%Y %I:%M:%S %p",
                     level=logging.DEBUG)
-
-# Script Parameters
-update_frequency = 1
-render = False
 
 
 def pong_preprocess_screen(screen):
@@ -119,25 +113,25 @@ def get_model(model_type="shallow_cnn", two_channel=False, ball_position=False,
         input_screen = Input(shape=input_shape)
         # Feed screen through convolutional net
         x = Conv2D(
-            filters=32, kernel_size=3, strides=2, padding='same',
+            filters=32, kernel_size=9, strides=1, padding='same',
             use_bias=True, activation=None, kernel_initializer='he_uniform'
         )(input_screen)
         x = BatchNormalization(axis=1)(x)
         x = Activation("relu")(x)
         x = Conv2D(
-            filters=16, kernel_size=3, strides=2, padding='same',
+            filters=32, kernel_size=7, strides=1, padding='same',
             use_bias=True, activation=None, kernel_initializer='he_uniform'
         )(x)
         x = BatchNormalization(axis=1)(x)
         x = Activation("relu")(x)
         x = Conv2D(
-            filters=16, kernel_size=4, strides=2, padding='same',
+            filters=32, kernel_size=5, strides=1, padding='same',
             use_bias=True, activation=None, kernel_initializer='he_uniform'
         )(x)
         x = BatchNormalization(axis=1)(x)
         x = Activation("relu")(x)
         x = Conv2D(
-            filters=16, kernel_size=5, strides=2, padding='same',
+            filters=32, kernel_size=5, strides=1, padding='same',
             use_bias=True, activation=None, kernel_initializer='he_uniform'
         )(x)
         x = BatchNormalization(axis=1)(x)
@@ -220,6 +214,10 @@ def get_ball_relative(env):
         return 1
 
 
+def adapt_exporation_rate(mean, exploration_rate_dict):
+    return exploration_rate_dict[round(mean)]
+
+
 def main(args):
     # Initialize tensorboardX writer
     writer = SummaryWriter("{}/{}/".format(args.logdir, args.name))
@@ -248,6 +246,19 @@ def main(args):
     if args.step_beta:
         beta, beta_end, beta_step, beta_inter = args.step_beta
 
+    if args.adaptive_exploration:
+        # Start adaptive sampling rate at 0.5. This mean half of the time
+        # the action will be sampled according to policy, half of the time
+        # uniformly.
+        exploration_rate = args.adaptive_exploration[0]
+        # Initialize dict containing rates for different mean rewards
+        exploration_rate_dict = {
+            reward: max(exploration_rate - args.adaptive_exploration[1]*i, 0)
+            for i, reward in enumerate(range(-21, 22))
+        }
+
+        logging.info("Using adaptive exploration.")
+
     # For smoothing per-episode reward logging
     reward_history = deque(maxlen=100)
     # Keep track of rewards in episode
@@ -269,7 +280,7 @@ def main(args):
 
     # Begin training
     while True:
-        if render:
+        if args.render:
             env.render()
         # Preprocess, consider the frame difference as features
         cur_x, mask_indices, paddle_indices \
@@ -305,7 +316,12 @@ def main(args):
         # Sample action. Original samples from [0, 5], but {0, 1, 4, 5} do
         # nothing. Sampling from [1, 3] allows same actions (nothing, up, down)
         # with less computation.
-        action = np.random.choice([1, 2, 3], 1, p=aprob)[0]
+        if args.adaptive_exploration and np.random.rand() < exploration_rate:
+            # Uniform sampling
+            action = np.random.choice([1, 2, 3], 1)[0]
+        else:
+            # Sample according to policy
+            action = np.random.choice([1, 2, 3], 1, p=aprob)[0]
 
         # +1 if took same actions as last step, -1 if different
         # FIXME: Should we take into account when no action was taken?
@@ -337,7 +353,7 @@ def main(args):
         if done:
             episode_number += 1
             # Periodically update the model
-            if episode_number % update_frequency == 0:
+            if episode_number % args.update_frequency == 0:
                 # Calculate weights for rewards ("discount")
                 discounted = discount_rewards(np.vstack(rewards), args.gamma)
 
@@ -403,12 +419,19 @@ def main(args):
                 model.save_weights(path)
 
             reward_history.append(reward_sum)
+
+            running_mean = sum(reward_history)/len(reward_history)
             # Reset environment and print the results for this episode
             logging.info(
-                "Episode: %d. " % episode_number +
-                "Total Episode Reward: %f. " % reward_sum +
-                "Running Mean: %f" % (sum(reward_history)/len(reward_history))
+                "Episode: {}. ".format(episode_number) +
+                "Total Episode Reward: {}. ".format(reward_sum) +
+                "Running Mean: {}".format(running_mean)
             )
+
+            if args.adaptive_exploration:
+                exploration_rate = adapt_exporation_rate(
+                    running_mean, exploration_rate_dict
+                )
 
             # Update alpha if we are at interval and haven't reached max
             # (and using step_alpha)
@@ -493,11 +516,22 @@ if __name__ == "__main__":
                         help="Parameter for discounting rewards")
     parser.add_argument("--lr", type=float, default=0.0002, required=False,
                         help="Learning rate for training.")
+    beta_group.add_argument("--adaptive_exploration", type=float,
+                            nargs=2, default=None,
+                            help="Sample actions occasionally uniformly "
+                                 "instead of according to the policy. "
+                                 "Adapts to the current running reward with "
+                                 "with more occasional uniform sampling at "
+                                 "low performance and less when the learning "
+                                 "advances. give <START> <DECREASE> "
+                                 "0.5 0.03 might be a good startin point.")
 
     # Args related to training, saving and logging
     parser.add_argument("--sample_batch", type=int, default=None,
                         help="Sample 'n' time-steps to train on instead of "
                              "training on all accumulated steps.")
+    parser.add_argument("--update_frequency", type=int, default=1,
+                        help="How many games to play before training model.")
     parser.add_argument("-s", "--savedir", default="./saved/",
                         help="Directory for saving models")
     parser.add_argument("-l", "--logdir", default="./log/",
@@ -509,5 +543,7 @@ if __name__ == "__main__":
                              "not saving proper checkpoint. Change?")
     parser.add_argument("--verbose", action="store_true",
                         help="Verbose logging to stdout")
+    parser.add_argument("--render", action="store_true",
+                        help="Render Pong screen while training.")
     args = parser.parse_args()
     main(args)
